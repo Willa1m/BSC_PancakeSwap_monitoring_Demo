@@ -1,0 +1,8 @@
+web3>=6,<8
+fastapi
+uvicorn
+sqlalchemy>=2
+python-dotenv
+pytest
+httpx
+psycopg2-binary

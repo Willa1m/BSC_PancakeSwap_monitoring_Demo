@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>BSC LP Monitor (demo)</title>
+<div class="card" id="admin">
+  <h3>任务5：监控任务管理</h3>
+  <div class="row" style="align-items:end">
+    <div class="kv"><b>API Key</b><input id="apikey" value="change-me" size="14"></div>
+    <div class="kv"><b>类型</b><select id="nkind"><option>pool</option><option>wallet</option></select></div>
+    <div class="kv"><b>地址</b><input id="naddr" size="44" placeholder="0x..."></div>
+    <button onclick="addTask()">新增监控</button>
+    <button onclick="loadTasks()">刷新</button>
+  </div>
+  <table id="tasks"><thead><tr><th>ID</th><th>类型</th><th>地址</th><th>状态</th><th>同步状态（最后成功 / 区块 / 错误）</th><th>操作</th></tr></thead><tbody></tbody></table>
+  <div class="muted">删除只停止后续采集，历史数据保留；补采/校验：POST /api/admin/tasks/{id}/backfill?from_block=&to_block=  ，GET /api/admin/tasks/{id}/verify?from_block=&to_block=</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  body{font-family:system-ui,sans-serif;margin:20px;background:#fafafa;color:#222}
+  .card{background:#fff;border:1px solid #ddd;border-radius:8px;padding:14px;margin-bottom:16px}
+  .row{display:flex;gap:24px;flex-wrap:wrap}
+  .kv b{display:block;font-size:12px;color:#777}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  td,th{border-bottom:1px solid #eee;padding:5px 6px;text-align:left}
+  .stale{color:#b00;font-weight:bold}
+  .ok{color:#080}
+  .muted{color:#888;font-size:12px}
+  tr.pos{cursor:pointer} tr.pos:hover{background:#f3f3f3}
+</style>
+</head>
+<body>
+<h2>BSC / PancakeSwap V3 监测 Demo</h2>
+
+<div class="card" id="pool">
+  <h3>任务1：池子 <span id="pair"></span> <span id="poolstate"></span></h3>
+  <div class="row" id="poolkv"></div>
+  <canvas id="priceChart" height="80"></canvas>
+  <h4>最近 Swap</h4>
+  <table id="swaps"><thead><tr><th>时间(UTC)</th><th>区块</th><th>方向</th><th>token0</th><th>token1</th><th>成交价</th><th>交易</th></tr></thead><tbody></tbody></table>
+</div>
+
+<div class="card" id="wallet">
+  <h3>任务2：钱包仓位 <span id="walletstate"></span></h3>
+  <div class="muted" id="walletnote"></div>
+  <table id="positions"><thead><tr><th>NFT ID</th><th>交易对</th><th>费率</th><th>价格区间</th><th>当前价</th><th>区间状态</th><th>当前价值(t1)</th><th>未领取手续费</th><th>净收益(t1)</th><th>事件覆盖</th></tr></thead><tbody></tbody></table>
+</div>
+
+<div class="card" id="detail" style="display:none">
+  <h3>任务3：仓位 #<span id="tid"></span> 收益曲线与时间线</h3>
+  <canvas id="pnlChart" height="80"></canvas>
+  <div class="muted">口径：净收益 = 取回本金 + 已领取手续费 + 当前价值(含未领取) − 累计投入；全部按当前价格折算成 token1；未计 Gas / 兑换成本。</div>
+  <h4>操作时间线</h4>
+  <table id="timeline"><thead><tr><th>时间(UTC)</th><th>区块</th><th>事件</th><th>amount0</th><th>amount1</th><th>流动性变化</th><th>备注</th><th>交易</th></tr></thead><tbody></tbody></table>
+</div>
+
+<script>
+const fmt = v => v == null ? '—' : (typeof v === 'string' && v.length > 14 ? Number(v).toPrecision(8) : v);
+const stateTag = s => s && !s.stale ? `<span class="ok">● 最新 (${Math.round(s.age_seconds)}s前)</span>`
+                                    : `<span class="stale">● 过期/未更新 ${s && s.last_error ? '— ' + s.last_error : ''}</span>`;
+let priceChart, pnlChart;
+
+async function loadPool(addr) {
+  const r = await fetch(`/api/pools/${addr}`);
+  if (!r.ok) { document.getElementById('pair').textContent = '(尚未采集到数据，稍等)'; return; }
+  const d = await r.json();
+  document.getElementById('pair').textContent = `${d.pair}  ${d.fee_pct}%`;
+  document.getElementById('poolstate').innerHTML = stateTag(d.pool_state);
+  const v = d.volume_24h;
+  document.getElementById('poolkv').innerHTML = [
+    ['价格', `${fmt(d.price)} ${d.price_unit}`], ['流动性(raw)', fmt(d.liquidity)],
+    ['成交量(已覆盖范围内)', `${Number(v.value).toFixed(2)} ${v.unit} / ${v.swaps} 笔`],
+    ['成交量覆盖起点', v.covered_from || '无数据'], ['最后更新', `${d.updated_at || '—'} @ 区块 ${d.block || '—'}`],
+    ['Swap 同步', `到区块 ${d.swap_sync.last_block || '—'} ${d.swap_sync.stale ? '(过期)' : ''}`],
+  ].map(([k, val]) => `<div class="kv"><b>${k}</b>${val}</div>`).join('');
+
+  const prices = await (await fetch(`/api/pools/${addr}/prices?hours=24`)).json();
+  const ctx = document.getElementById('priceChart');
+  const data = {labels: prices.map(p => p.ts.slice(11, 16)), datasets: [{label: '价格', data: prices.map(p => p.price), pointRadius: 0, borderWidth: 1.5}]};
+  if (priceChart) { priceChart.data = data; priceChart.update(); } else priceChart = new Chart(ctx, {type: 'line', data});
+
+  const swaps = await (await fetch(`/api/pools/${addr}/swaps?limit=25`)).json();
+  document.querySelector('#swaps tbody').innerHTML = swaps.map(s =>
+    `<tr><td>${s.ts.replace('T', ' ').slice(0, 19)}</td><td>${s.block}</td><td>${s.direction}</td><td>${fmt(s.amount0)}</td><td>${fmt(s.amount1)}</td><td>${fmt(s.price)}</td><td><a href="${s.tx}" target="_blank">${s.tx.slice(-10)}</a> #${s.log_index}</td></tr>`).join('');
+}
+
+async function loadWallet(w) {
+  const d = await (await fetch(`/api/wallets/${w}/positions`)).json();
+  document.getElementById('walletstate').innerHTML = stateTag(d.wallet_sync);
+  document.getElementById('walletnote').textContent = d.note || '';
+  document.querySelector('#positions tbody').innerHTML = d.positions.map(p =>
+    `<tr class="pos" onclick="loadDetail(${p.token_id})"><td>${p.token_id}</td><td>${p.pair}</td><td>${p.fee_pct}%</td>
+     <td>${fmt(p.price_lower)} ~ ${fmt(p.price_upper)}</td><td>${fmt(p.current_price)}</td>
+     <td>${p.in_range == null ? '—' : p.in_range ? '区间内' : '<span class="stale">区间外</span>'}</td>
+     <td>${fmt(p.value_t1)}</td><td>${fmt(p.unclaimed_fees.token0)} / ${fmt(p.unclaimed_fees.token1)}</td><td>${fmt(p.net_pnl_t1)}</td>
+     <td>${p.events_sync.exists ? `${p.events_sync.from_block}→${p.events_sync.last_block}` : '未开始'}</td></tr>`).join('');
+}
+
+async function loadDetail(tid) {
+  document.getElementById('detail').style.display = '';
+  document.getElementById('tid').textContent = tid;
+  const c = await (await fetch(`/api/positions/${tid}/curve`)).json();
+  const data = {labels: c.points.map(p => p.ts.slice(5, 16)), datasets: [
+    {label: '仓位价值', data: c.points.map(p => +p.value)}, {label: '累计已领手续费', data: c.points.map(p => +p.fees)},
+    {label: '净收益', data: c.points.map(p => +p.net_pnl)}]};
+  if (pnlChart) { pnlChart.data = data; pnlChart.update(); } else pnlChart = new Chart(document.getElementById('pnlChart'), {type: 'line', data});
+  const t = await (await fetch(`/api/positions/${tid}/timeline`)).json();
+  document.querySelector('#timeline tbody').innerHTML =
+    `<tr><td colspan="8" class="muted">事件覆盖区块 ${t.coverage.from_block} → ${t.coverage.last_block}；早于起点的历史未采集${t.coverage.stale ? '（同步过期）' : ''}</td></tr>` +
+    t.events.map(e => `<tr><td>${e.ts.replace('T', ' ').slice(0, 19)}</td><td>${e.block}</td><td>${e.kind}</td><td>${e.amount0}</td><td>${e.amount1}</td><td>${e.liquidity_delta}</td><td>${e.extra || ''}</td><td><a href="${e.tx}" target="_blank">${e.tx.slice(-10)}</a> #${e.log_index}</td></tr>`).join('');
+}
+
+const hdr = () => ({'X-API-Key': document.getElementById('apikey').value, 'Content-Type': 'application/json'});
+async function loadTasks() {
+  const r = await fetch('/api/admin/tasks', {headers: hdr()});
+  if (!r.ok) { document.querySelector('#tasks tbody').innerHTML = `<tr><td colspan="6" class="stale">鉴权失败 (${r.status})</td></tr>`; return; }
+  const d = await r.json();
+  document.querySelector('#tasks tbody').innerHTML = d.tasks.map(t => {
+    const sync = Object.entries(t.sync).map(([k, s]) => `${k.split(':')[0]}: ${s.exists ? `${s.updated_at ? s.updated_at.slice(11,19) : '—'} / 块 ${s.last_block ?? '—'}${s.stale ? ' <span class="stale">过期</span>' : ''}${s.last_error ? ' <span class="stale">' + s.last_error.slice(0,60) + '</span>' : ''}` : '未开始'}`).join('<br>');
+    return `<tr><td>${t.id}</td><td>${t.kind}</td><td>${t.address.slice(0,12)}…</td><td>${t.status}</td><td class="muted">${sync}</td>
+      <td><button onclick="act(${t.id},'pause')">暂停</button> <button onclick="act(${t.id},'resume')">恢复</button> <button onclick="act(${t.id},'delete')">删除</button></td></tr>`;
+  }).join('');
+}
+async function act(id, a) {
+  await fetch(`/api/admin/tasks/${id}` + (a === 'delete' ? '' : '/' + a), {method: a === 'delete' ? 'DELETE' : 'POST', headers: hdr()});
+  loadTasks();
+}
+async function addTask() {
+  const r = await fetch('/api/admin/tasks', {method: 'POST', headers: hdr(),
+    body: JSON.stringify({kind: document.getElementById('nkind').value, address: document.getElementById('naddr').value})});
+  if (!r.ok) alert('失败: ' + (await r.text()));
+  loadTasks();
+}
+
+(async () => {
+  loadTasks(); setInterval(loadTasks, 20000);
+  const cfg = await (await fetch('/api/pools')).json();
+  const tick = () => { if (cfg.pools[0]) loadPool(cfg.pools[0]); if (cfg.wallets[0]) loadWallet(cfg.wallets[0]); };
+  tick(); setInterval(tick, 20000);
+})();
+</script>
+</body>
+</html>
