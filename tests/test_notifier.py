@@ -1,4 +1,4 @@
-"""任务4的可测部分：去重入队、失败重试退避、超限标记 failed。用 SQLite 内存库 + 假发送函数。"""
+"""通知模块的可测部分：去重入队、失败重试退避、超限标记 failed。用 SQLite 内存库 + 假发送函数。"""
 import os
 os.environ["DATABASE_URL"] = "sqlite://"
 os.environ["TELEGRAM_BOT_TOKEN"] = "test-token"

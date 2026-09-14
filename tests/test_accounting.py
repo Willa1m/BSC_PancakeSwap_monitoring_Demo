@@ -1,8 +1,8 @@
 from decimal import Decimal
 from app import accounting
 
-def test_task3_example():
-    """任务表算例：投入1000 + 追加200，取回300，剩余估值950 → 净收益 50。全部以 token1 计价（token0 为 0）"""
+def test_net_pnl_example():
+    """投入1000 + 追加200，取回300，剩余估值950 → 净收益 50。全部以 token1 计价（token0 为 0）"""
     events = [
         {"kind": "INCREASE", "amount0": 0, "amount1": 1000},
         {"kind": "INCREASE", "amount0": 0, "amount1": 200},

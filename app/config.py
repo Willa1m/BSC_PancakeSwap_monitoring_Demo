@@ -1,5 +1,5 @@
 """
-配置：全部从环境变量 / .env 读取。凭据和地址不写死在代码里（listing 的部署运维要求）。
+配置：全部从环境变量 / .env 读取，凭据和地址不写死在代码里。
 """
 import os
 from dotenv import load_dotenv
@@ -35,12 +35,12 @@ STALE_AFTER = int(os.getenv("STALE_AFTER", "300"))           # 应高于最慢�
 
 RPC_MIN_INTERVAL = float(os.getenv("RPC_MIN_INTERVAL", "0.05"))   # RPC 限流：两次请求最小间隔（秒）
 
-# --- 任务4：Telegram ---
+# --- Telegram ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")          # 空 = 不启用 Telegram
 TELEGRAM_SEND_INTERVAL = float(os.getenv("TELEGRAM_SEND_INTERVAL", "1.1"))  # 限频：每条消息最小间隔
 TELEGRAM_MAX_RETRY = int(os.getenv("TELEGRAM_MAX_RETRY", "5"))
 
-# --- 任务5：管理接口 ---
+# --- 管理接口 ---
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "change-me")
 
 EXPLORER = "https://bscscan.com"

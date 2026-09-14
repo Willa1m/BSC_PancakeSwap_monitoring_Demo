@@ -2,8 +2,8 @@
 后台采集：在独立线程里持续运行，网页关了也在更新。
 
 两个循环：
-  pool_loop   —— 任务1：每 POLL_INTERVAL 秒读池子状态存快照 + 增量扫描 Swap 日志
-  wallet_loop —— 任务2/3：每 WALLET_INTERVAL 秒同步钱包仓位、扫描仓位事件、写收益快照
+  pool_loop   —— 每 POLL_INTERVAL 秒读池子状态存快照 + 增量扫描 Swap 日志
+  wallet_loop —— 每 WALLET_INTERVAL 秒同步钱包仓位、扫描仓位事件、写收益快照
 
 可靠性设计：
 - 每个采集对象一个 SyncState，成功才推进 last_block（断点续采）。
@@ -57,7 +57,7 @@ def mark_error(db, st, err):
                          f"⚠ 采集异常｜{st.key}｜{str(err)[:120]}｜最后成功区块 {st.last_block}")
 
 
-# ---------------- 任务1：池子 ----------------
+# ---------------- 池子 ----------------
 def ensure_pool(db, addr) -> Pool:
     p = db.get(Pool, addr)
     if p:
@@ -116,7 +116,7 @@ def scan_swaps(db, addr):
         mark_error(db, st, e)
 
 
-# ---------------- 任务2：钱包仓位 ----------------
+# ---------------- 钱包仓位 ----------------
 def sync_positions(db, wallet):
     """
     读取钱包直接持有的 Position NFT。
@@ -222,7 +222,7 @@ def scan_position_events(db, token_ids):
             mark_error(db, st, e)
 
 
-# ---------------- 任务3：收益快照 ----------------
+# ---------------- 收益快照 ----------------
 def snapshot_position(db, p: Position):
     """用当前池子价格给仓位估值，并按事件流水算净收益，存一个曲线点"""
     try:
@@ -255,7 +255,7 @@ def snapshot_position(db, p: Position):
         db.rollback()
 
 
-# ---------------- 任务5：任务表驱动的主循环 ----------------
+# ---------------- 配置表驱动的主循环 ----------------
 _task_locks = {}
 _locks_guard = threading.Lock()
 
@@ -318,7 +318,7 @@ def run_wallet_task(w):
 
 def pool_loop():
     while True:
-        for addr in active_tasks("pool"):     # 每轮重新读任务表：暂停/删除立即生效
+        for addr in active_tasks("pool"):     # 每轮重新读配置表：暂停/删除立即生效
             run_pool_task(addr)
         time.sleep(config.POLL_INTERVAL)
 

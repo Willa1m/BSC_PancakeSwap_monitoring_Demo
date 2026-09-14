@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>BSC LP Monitor (demo)</title>
 <div class="card" id="admin">
-  <h3>任务5：监控任务管理</h3>
+  <h3>监控任务管理</h3>
   <div class="row" style="align-items:end">
     <div class="kv"><b>API Key</b><input id="apikey" value="change-me" size="14"></div>
     <div class="kv"><b>类型</b><select id="nkind"><option>pool</option><option>wallet</option></select></div>
@@ -34,7 +34,7 @@
 <h2>BSC / PancakeSwap V3 监测 Demo</h2>
 
 <div class="card" id="pool">
-  <h3>任务1：池子 <span id="pair"></span> <span id="poolstate"></span></h3>
+  <h3>池子 <span id="pair"></span> <span id="poolstate"></span></h3>
   <div class="row" id="poolkv"></div>
   <canvas id="priceChart" height="80"></canvas>
   <h4>最近 Swap</h4>
@@ -42,13 +42,13 @@
 </div>
 
 <div class="card" id="wallet">
-  <h3>任务2：钱包仓位 <span id="walletstate"></span></h3>
+  <h3>钱包仓位 <span id="walletstate"></span></h3>
   <div class="muted" id="walletnote"></div>
   <table id="positions"><thead><tr><th>NFT ID</th><th>交易对</th><th>费率</th><th>价格区间</th><th>当前价</th><th>区间状态</th><th>当前价值(t1)</th><th>未领取手续费</th><th>净收益(t1)</th><th>事件覆盖</th></tr></thead><tbody></tbody></table>
 </div>
 
 <div class="card" id="detail" style="display:none">
-  <h3>任务3：仓位 #<span id="tid"></span> 收益曲线与时间线</h3>
+  <h3>仓位 #<span id="tid"></span> 收益曲线与时间线</h3>
   <canvas id="pnlChart" height="80"></canvas>
   <div class="muted">口径：净收益 = 取回本金 + 已领取手续费 + 当前价值(含未领取) − 累计投入；全部按当前价格折算成 token1；未计 Gas / 兑换成本。</div>
   <h4>操作时间线</h4>

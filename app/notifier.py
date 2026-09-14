@@ -1,5 +1,5 @@
 """
-任务4：Telegram 实时播报。
+Telegram 实时播报。
 
 结构（检测与发送分离）：
   enqueue()      —— 采集模块检测到事件后调用，只往 notifications 表写一行（dedup_key 唯一 → 不刷屏）

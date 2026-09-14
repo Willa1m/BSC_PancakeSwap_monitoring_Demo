@@ -112,7 +112,7 @@ class PositionSnapshot(Base):
 
 
 class MonitorTask(Base):
-    """任务5：监控对象配置持久化。删除任务只停采集，历史数据独立删除。"""
+    """监控对象配置持久化。删除任务只停采集，历史数据独立删除。"""
     __tablename__ = "monitor_tasks"
     id = Column(Integer, primary_key=True)
     kind = Column(String)        # pool / wallet
@@ -123,7 +123,7 @@ class MonitorTask(Base):
 
 
 class Subscription(Base):
-    """任务4：chat 订阅了哪些主题。topic: liquidity / range / errors / all"""
+    """chat 订阅了哪些主题。topic: liquidity / range / errors / all"""
     __tablename__ = "subscriptions"
     id = Column(Integer, primary_key=True)
     chat_id = Column(String)
@@ -132,7 +132,7 @@ class Subscription(Base):
 
 
 class Notification(Base):
-    """任务4：消息发件箱。事件检测只写这张表，发送 worker 单独消费——检测与发送分离。"""
+    """消息发件箱。事件检测只写这张表，发送 worker 单独消费——检测与发送分离。"""
     __tablename__ = "notifications"
     id = Column(Integer, primary_key=True)
     dedup_key = Column(String, unique=True)   # 同一事件只入队一次，不刷屏
