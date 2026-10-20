@@ -1,100 +1,115 @@
-# BSC / PancakeSwap V3 LP 监测 Demo
+# BSC · PancakeSwap V3 LP Monitor
 
-监控 PancakeSwap V3 池子、钱包仓位、收益曲线、Telegram 通知及采集任务。
+Monitors PancakeSwap V3 pools and wallet LP positions on BNB Smart Chain: pool prices, swaps, position events, net-fee accounting and Telegram alerts, with ingestion that is safe to restart and easy to verify against the chain.
 
-## 一、运行（5 分钟）
+![Python](https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)
+![web3.py](https://img.shields.io/badge/web3.py-F16822?style=flat-square&logo=web3dotjs&logoColor=white)
+![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy_2-D71F00?style=flat-square&logo=sqlalchemy&logoColor=white)
+![pytest](https://img.shields.io/badge/pytest-0A9EDC?style=flat-square&logo=pytest&logoColor=white)
+
+> **Status: work in progress.** This is an unfinished demo. The known simplifications are listed [below](#known-simplifications).
+
+## Architecture
+
+```mermaid
+flowchart LR
+    RPC[(BSC RPC)] -->|throttled, chunked getLogs + retry| CHAIN[chain.py]
+    CHAIN --> COL[collector.py<br/>background threads]
+    COL -->|"unique (tx_hash, log_index)<br/>sync_state checkpoints"| DB[(SQLite / PostgreSQL)]
+    DB --> API[api.py<br/>read-only queries]
+    API --> UI[static dashboard<br/>index.html]
+    COL -->|enqueue only| OUT[(notifications outbox)]
+    OUT --> SEND[notifier.py sender] --> TG[Telegram]
+    ADMIN[admin.py<br/>X-API-Key] -->|tasks · backfill · verify| COL
+```
+
+## Highlights
+
+- **Idempotent ingestion.** Swaps are deduplicated by a database unique constraint on `(tx_hash, log_index)`, the natural coordinates of an on-chain log. Re-scans and restarts hit the constraint and skip the row, so no in-memory bookkeeping is needed.
+- **Checkpointed resume.** Each collected object has a `sync_state` row whose `last_block` only advances after every page of logs in that range has been stored. After a crash, collection resumes from `last_block + 1`.
+- **Exact V3 math.** `sqrtPriceX96` → price, tick → sqrt price and liquidity → token amounts are done in `Decimal`, and amounts are stored as strings, because `uint256` values exceed float precision (`app/v3math.py`).
+- **Fees are not principal.** `DecreaseLiquidity` only moves tokens into `tokensOwed`; `Collect` actually pays out. Fees are computed as cumulative Collect − cumulative Decrease (`app/accounting.py`, `tests/test_accounting.py`).
+- **Detection is decoupled from delivery.** Collectors only write a row to the `notifications` outbox; a separate sender thread handles Telegram rate limits and retries, and a `dedup_key` constraint ensures one message per event per chat. Alerts fire on state changes (e.g. in-range → out-of-range), not on every sample.
+- **Verifiable.** An admin endpoint backfills a block range and another compares the chain with the database row by row, reporting `missing`, `extra` and `duplicates_in_db`.
+
+## Tech Stack
+
+Python · FastAPI · Uvicorn · web3.py · SQLAlchemy 2 · SQLite (default) or PostgreSQL 16 via Docker Compose · python-dotenv · pytest · httpx · vanilla HTML/JS dashboard
+
+## Getting Started
 
 ```bash
 python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env                                 # 需要的话改 RPC_URL
-uvicorn app.main:app --port 8000                     # 不要加 --reload，会起两份采集线程
+cp .env.example .env                                 # edit RPC_URL if needed
+uvicorn app.main:app --port 8000                     # do NOT use --reload: it would start two collector threads
 ```
-打开 http://localhost:8000 。首次启动要等 1–3 分钟：Swap 回扫默认 12 万区块，仓位事件回扫 40 万区块，公共 RPC 会比较慢。看到"过期/未更新"先别慌，看终端日志里的错误。
 
-使用 PostgreSQL：`docker compose up -d`，然后在 `.env` 中将 `DATABASE_URL` 改成 Postgres 配置。代码不用修改。
+Open <http://localhost:8000>. The first start takes 1–3 minutes on a public RPC: swaps are back-scanned 120,000 blocks and position events 400,000 blocks by default (`SWAP_LOOKBACK_BLOCKS`, `POSITION_LOOKBACK_BLOCKS`).
 
-**如果之前跑过旧版本**：删掉 `monitor.db`（表结构变了，create_all 不会加列）。
+- **PostgreSQL instead of SQLite:** `docker compose up -d`, then set `DATABASE_URL` in `.env` to the Postgres URL shown in `.env.example`.
+- **Upgrading from an older run:** delete `monitor.db`; there are no migrations and `create_all` does not add columns.
+- **Tests:** `python -m pytest`
+- **Telegram (optional):** put a @BotFather token in `TELEGRAM_BOT_TOKEN`, restart, add the bot to a chat and send `/sub all`. Commands: `/pool`, `/wallet`, `/sub liquidity|range|errors|all`, `/unsub <topic>`, `/subs`, `/replay <NFT ID>`.
 
-单元测试：`python -m pytest`
+### Admin API (header `X-API-Key: <ADMIN_API_KEY>`)
 
-### Telegram
-1. 找 @BotFather 建 bot，把 token 填进 `.env` 的 `TELEGRAM_BOT_TOKEN`，重启。
-2. 把 bot 拉进测试群（或私聊），发 `/sub all`。
-3. 命令：`/pool` `/wallet` `/sub liquidity|range|errors|all` `/unsub <topic>` `/subs` `/replay <NFT ID>`（历史回放，消息带"【历史回放】"前缀）。
-4. 发件箱状态：`GET /api/admin/notifications?status=failed`（带 X-API-Key）。
-
-### 管理接口（请求头 `X-API-Key: <ADMIN_API_KEY>`）
-| 操作 | 接口 |
+| Action | Endpoint |
 |---|---|
-| 列表（分页、按状态过滤）| `GET /api/admin/tasks?page=1&size=20&status=active` |
-| 新增 | `POST /api/admin/tasks` body `{"kind":"pool","address":"0x..."}` |
-| 暂停 / 恢复 / 删除 | `POST .../{id}/pause` `POST .../{id}/resume` `DELETE .../{id}` |
-| 删除历史数据（独立操作，需先暂停/删除）| `DELETE .../{id}/data` |
-| 历史补采 | `POST .../{id}/backfill?from_block=A&to_block=B` |
-| 完整性校验（链上 vs 库内逐条比对）| `GET .../{id}/verify?from_block=A&to_block=B` |
-| 健康检查 | `GET /api/health` |
-| 接口文档（FastAPI 自动生成）| `GET /docs` |
+| List tasks (paged, filter by status) | `GET /api/admin/tasks?page=1&size=20&status=active` |
+| Add task | `POST /api/admin/tasks` with `{"kind":"pool","address":"0x..."}` |
+| Pause / resume / delete | `POST .../{id}/pause` · `POST .../{id}/resume` · `DELETE .../{id}` |
+| Delete stored data | `DELETE .../{id}/data` |
+| Backfill swaps | `POST .../{id}/backfill?from_block=A&to_block=B` |
+| Verify chain vs. DB | `GET .../{id}/verify?from_block=A&to_block=B` |
+| Health / API docs | `GET /api/health` · `GET /docs` |
 
-网页底部的"监控任务管理"卡片是这些接口的按钮版。
+## Project Structure
 
-## 二、代码结构
+```text
+app/
+├── config.py       # all settings from .env
+├── chain.py        # web3 connection, minimal ABIs, chunked getLogs, throttling, retry
+├── v3math.py       # Decimal V3 price / tick / liquidity math
+├── models.py       # 10 tables, unique constraints, sync_state checkpoints
+├── collector.py    # pool polling, swap scanning, position sync, snapshots, backfill/verify
+├── accounting.py   # pure functions: cash-flow split and net-fee accounting
+├── api.py          # read-only query endpoints with stale/coverage flags
+├── notifier.py     # outbox, sender, bot commands, history replay
+├── admin.py        # task management, backfill, verify, API-key auth
+└── static/index.html
+tests/              # V3 math, accounting, notification dedup and retry
+docs/README.zh-CN.md  # original Chinese design notes and verification checklist
+docker-compose.yml  # optional PostgreSQL
+```
 
-| 文件 | 负责什么 |
-|---|---|
-| `app/config.py` | 全部参数从 .env 读；池子/钱包用逗号分隔，新增不改代码 |
-| `app/chain.py` | 统一 RPC 模块：web3 连接、POA 中间件、ABI、事件 topic、分段 getLogs + 退避重试 |
-| `app/v3math.py` | sqrtPriceX96 → 价格、tick → sqrtPrice、流动性 → 两种代币数量；全部 Decimal |
-| `app/models.py` | 10 张表；金额存字符串；(tx_hash, log_index) 唯一约束去重；SyncState 记断点 |
-| `app/collector.py` | 后台线程：池子轮询、Swap 增量扫描、仓位同步、事件时间线、收益快照 |
-| `app/accounting.py` | 纯函数：资金流水拆分、净收益核算 |
-| `app/api.py` | 查询接口，只读库不碰 RPC；每个接口返回 stale/coverage |
-| `app/static/index.html` | 卡片 + 价格曲线 + Swap 列表 + 仓位表 + 收益曲线/时间线 |
-| `app/notifier.py` | 发件箱入队、发送 worker、bot 命令和历史回放 |
-| `app/admin.py` | 任务增删暂停恢复、补采、校验、删数据、API Key 鉴权和分页 |
-| `tests/` | V3 数学、收益核算、通知去重与重试的单元测试 |
+## Results / Learnings
 
-## 三、关键设计
+- The test suite (`tests/`) covers the V3 math, the fee accounting and the outbox's dedup and retry behavior; it passed 9/9 when this README was written.
+- A manual verification checklist (spot-checking swaps and prices on BscScan, simulating RPC and Telegram failures, crash/restart, pause/resume gaps) is in [`docs/README.zh-CN.md`](docs/README.zh-CN.md#四验证清单).
+- Coverage is reported honestly: 24h volume only counts the collected range and returns `covered_from`, and a failed RPC call marks data as stale instead of showing zeros.
 
-1. **为什么金额存字符串、算用 Decimal**：uint256 超过 float 的 53 位有效数字，float 会静默丢精度；SQLite 的 Numeric 底层也是 float。
-2. **去重怎么做**：数据库唯一约束 `(tx_hash, log_index)`。链上一条日志的坐标就是这两个值，重复扫描/重启后再扫，插入会撞约束被跳过，而不是靠内存里记"扫过没"。
-3. **断点续采**：`sync_state` 表每个采集对象一行，每一页相关日志都成功后才推进 `last_block`。进程中断后从 `last_block+1` 继续。
-4. **区块回退**：只处理 `latest - CONFIRMATIONS` 之前的区块（默认 15 个确认）。简化版，没有做 parentHash 比对回滚。
-5. **RPC 超时**：`mark_error` 只标记 stale + 记错误，不动已有数据；网页显示"过期"而不是 0。
-6. **减少流动性 ≠ 领取**：DecreaseLiquidity 只把代币记到 tokensOwed，Collect 才真正到钱包。手续费 = 累计 Collect − 累计 Decrease，这样本金不会被算成收益（见 `accounting.py` 和 `tests/test_accounting.py`）。
-7. **检测与发送分离**：采集线程只往 `notifications` 表写一行就走，Telegram 挂了、限流了、token 错了，都只影响 sender 线程。`dedup_key` 唯一约束保证同一事件同一 chat 只入队一次。
-8. **状态变化触发，不是采样触发**：区间越界只在 `range_status` 从 A 变 B 时发一条；采集异常只在"正常→异常"那一刻发一条，之后每轮采样失败不再重复发。
-9. **配置表驱动**：采集循环每轮重新读 `monitor_tasks`，暂停/删除立刻生效；暂停不清 `sync_state`，恢复后从断点接着采，所以暂停期间是"有缺口"而非"补齐"。
-10. **补采与实时采集不并发**：同一对象一把 `threading.Lock`，补采期间实时采集那一轮直接跳过，避免两边同时推进断点。
-11. **RPC 限流**：所有请求走 `chain.py` 的节流器，多任务并发也不会把公共节点打爆。
-12. **覆盖范围如实展示**：24h 成交量只统计已采集范围，`covered_from` 告诉你实际起点；事件时间线标注覆盖区块区间。
+### Known simplifications
 
-## 四、验证清单
+- Valuation converts all historical flows at the current price, not the price at each event; gas, swap costs and NFT cost basis are ignored.
+- Positions staked in MasterChefV3 are owned by the MasterChef contract, so `balanceOf(wallet)` does not see them.
+- `tokensOwed` is only settled when a position is touched, so unclaimed fees may be underestimated.
+- Reorg handling relies on confirmation depth only (default 15 blocks); there is no parentHash rollback.
+- No migrations, threads instead of asyncio, a single static API key, and backfill/verify only for swaps.
+- The ABIs in `chain.py` are hand-written minimal versions; check event signatures against BscScan before relying on them.
 
-- 抽查 3 笔 Swap：网页表里点交易链接，到 BscScan 的 Logs 页找 Swap 日志，对比 amount0/amount1、log index。
-- 抽查 1 个价格点：`/api/pools/<addr>/prices` 取一个 block，BscScan 上"Read Contract → slot0"选该区块（需要归档节点；不行就用最新块对比网页最新值）。
-- 模拟 RPC 超时：.env 把 `RPC_URL` 改成一个不存在的地址后重启，或运行中断网；网页应显示"过期"并保留旧值；若订阅了 errors 主题，Telegram 收到一条（只一条）异常播报。
-- 模拟 Telegram 失败：把 token 改错后重启，`/api/admin/notifications` 看到 attempts 递增、最后 failed；同时池子/仓位采集照常推进。
-- 模拟进程中断：Ctrl+C 再启动，`sync_state.last_block` 继续推进，`swaps` 不重复（唯一约束）。
-- 补采后校验：`backfill` 一段范围，再 `verify` 同一范围，`missing` 和 `extra` 都应为空、`duplicates_in_db` 为 0。
-- 暂停/恢复：暂停 5 分钟再恢复，价格曲线应有一段空白（不是补的），Swap 会从断点继续扫（这段不会缺，因为是按区块扫的）。
-- 一个任务异常不阻塞其他：新增一个错误地址的 pool 任务，它会一直报错，但原池子继续更新。
-- 重启不重复：停掉再启动，`select count(*) from swaps` 不变；`sync_state` 的 last_block 继续推进。
-- 仓位为空：若示例钱包没有直接持有的 V3 NFT，网页会明确提示，而不是空白。
+## 中文说明
 
-## 五、已知简化
+本项目监控 BNB Smart Chain 上 PancakeSwap V3 的池子与钱包流动性仓位，包括价格、Swap、仓位事件、手续费核算和 Telegram 告警。目前是**开发中的半成品**。
 
-- 估值用当前价格一个时点折算所有历史流水，没有用事件发生时的历史价格。
-- 不计 Gas、兑换成本、NFT 转入时的成本基础。
-- 质押在 MasterChefV3 的仓位 NFT 所有者是 MasterChef 合约，`balanceOf(wallet)` 读不到。
-- `tokensOwed` 只在仓位被操作时结算，"未领取手续费"可能低估。
-- 回退处理只靠确认数，没做 reorg 检测回滚。
-- 没有数据库迁移工具（改表要删库重建）；线程而非 asyncio；鉴权是单一静态 API Key。
-- Telegram 收益摘要只有 /wallet 按需查询，没做定时推送。
-- 补采/校验只做了 Swap，仓位事件的补采靠改 `POSITION_LOOKBACK_BLOCKS` 重扫。
-- 同步 web3 + 线程，够用但不是高并发方案。
+设计重点是采集过程「可重启、可校验」：
 
-## 六、合约配置核验
+- 以 `(tx_hash, log_index)` 唯一约束去重；
+- 用 `sync_state` 断点续采；
+- V3 数学全部使用 `Decimal`；
+- 手续费按「累计 Collect − 累计 Decrease」核算；
+- 告警采用发件箱模式，与采集解耦；
+- 管理接口支持对任意区块范围做补采，以及链上与库内的逐条比对。
 
-- `chain.py` 里的 ABI 是按 PancakeSwap V3 手写的最小版本，Swap 事件带 protocolFees 两个字段。请到 BscScan 打开池子合约的 Contract → Events 核对一下签名；如果 topic 不一致会一条 Swap 都扫不到。
-- NPM / Factory 地址是 BSC 主网的 PancakeSwap V3 合约，请在 PancakeSwap 文档核对。
+运行方法见上方 Getting Started。完整的中文设计说明和验证清单见 [`docs/README.zh-CN.md`](docs/README.zh-CN.md)。
