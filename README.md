@@ -99,6 +99,10 @@ docker-compose.yml  # optional PostgreSQL
 - No migrations, threads instead of asyncio, a single static API key, and backfill/verify only for swaps.
 - The ABIs in `chain.py` are hand-written minimal versions; check event signatures against BscScan before relying on them.
 
+---
+
+*Documentation and repository cleanup were done with AI assistance (Claude Code); the project code and results are my own.*
+
 ## 中文说明
 
 本项目监控 BNB Smart Chain 上 PancakeSwap V3 的池子与钱包流动性仓位，包括价格、Swap、仓位事件、手续费核算和 Telegram 告警。目前是**开发中的半成品**。
